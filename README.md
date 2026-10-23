@@ -4,9 +4,9 @@ Haftalık antrenman programı için kişisel kilo/tekrar takip uygulaması (Andr
 
 **İndir:** https://github.com/akema01/kilo-takip/releases/latest/download/KiloTakip.apk
 
-- Gün sekmeleri (Pazartesi, Salı, Çarşamba, Cuma, Cumartesi); açılışta bugünün günü seçilir.
-- Harekete dokun → setlerin kilo/tekrarını gir → Kaydet. Alanlar son kayıtla dolu gelir.
-- Her kayıtta en iyi set önceki kayıtla karşılaştırılır (▲ +2.5 kg / ▼ / aynı), grafik ve geçmiş listesi.
+- 4 antrenman (A–D), güne bağlı değil; haftada 4 antrenman hedefi (Pzt–Paz).
+- "Antrenmanı başlat" → antrenman seç → hareket hareket ilerle, sadece kilo gir (set/tekrar sabit).
+- Kilo kayıtlı kalır; artırınca güncellenir, değişiklik geçmişi ve grafik hareket detayında.
 - Aynı hareket farklı günlerde geçmişi paylaşır (ör. Lateral Raise Pzt + Cuma).
 - Menü → Yedeği paylaş / Yedek yükle.
 
