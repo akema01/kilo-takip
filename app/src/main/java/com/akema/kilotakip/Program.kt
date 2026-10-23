@@ -18,6 +18,11 @@ data class Workout(val name: String, val focus: String, val exercises: List<Exer
 
 const val WEEKLY_TARGET = 4
 
+// Uygulama 172 cm, spor yapan bir erkek için: BMI ~24 ve bel/boy oranı ~0.47 varsayılan hedefler.
+const val HEIGHT_CM = 172.0
+const val GOAL_WEIGHT = 72.0
+const val GOAL_WAIST = 80.0
+
 val PROGRAM = listOf(
     Workout(
         "Antrenman A", "Göğüs · Omuz · Arka kol", listOf(

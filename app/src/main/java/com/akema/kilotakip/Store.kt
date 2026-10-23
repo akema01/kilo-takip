@@ -39,8 +39,13 @@ data class AppData(
     val body: List<BodyEntry> = emptyList(),
     /** Uygulamanın ilk açıldığı gün; kaç haftadır kullanıldığı buradan sayılır. */
     val start: String? = null,
+    val goalWeight: Double = GOAL_WEIGHT,
+    val goalWaist: Double = GOAL_WAIST,
 ) {
     private fun bodySorted() = body.sortedWith(compareBy({ it.date }, { it.id }))
+
+    fun firstBodyWeight() = bodySorted().firstOrNull { it.weight != null }?.weight
+    fun firstWaist() = bodySorted().firstOrNull { it.waist != null }?.waist
 
     fun bodyWeight() = bodySorted().lastOrNull { it.weight != null }?.weight
     fun waist() = bodySorted().lastOrNull { it.waist != null }?.waist
@@ -147,6 +152,8 @@ class Store(context: Context) {
                     })
                 }
                 d.start?.let { put("start", it) }
+                put("gw", d.goalWeight)
+                put("gb", d.goalWaist)
                 put("body", JSONArray().apply {
                     d.body.forEach { b ->
                         put(JSONObject().apply {
@@ -190,6 +197,8 @@ class Store(context: Context) {
                     }
                 } ?: emptyList(),
                 start = o.optString("start").ifEmpty { null },
+                goalWeight = o.optDouble("gw", GOAL_WEIGHT),
+                goalWaist = o.optDouble("gb", GOAL_WAIST),
             )
         }
 

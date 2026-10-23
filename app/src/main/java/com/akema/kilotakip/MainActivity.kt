@@ -126,7 +126,10 @@ fun App(store: Store) {
     var step by rememberSaveable { mutableIntStateOf(0) }
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    // 0: yok, 1: antrenman bitti, 2: haftanın 4. antrenmanı bitti
+    var celebrate by rememberSaveable { mutableIntStateOf(0) }
 
+    Box(Modifier.fillMaxSize()) {
     when {
         running >= 0 -> WorkoutScreen(
             workout = PROGRAM[running],
@@ -138,6 +141,7 @@ fun App(store: Store) {
             onFinish = {
                 update(data.finish(running))
                 running = -1
+                celebrate = if (data.thisWeek().size == WEEKLY_TARGET) 2 else 1
             },
             onExit = { running = -1 },
         )
@@ -156,6 +160,7 @@ fun App(store: Store) {
             data = data,
             tabBar = { TabBar(tab) { tab = it } },
             onBody = { w, b, h -> update(data.addBody(w, b, h)) },
+            onGoals = { w, b -> update(data.copy(goalWeight = w, goalWaist = b)) },
             onOpen = { detail = it },
         )
         else -> HomeScreen(
@@ -167,22 +172,34 @@ fun App(store: Store) {
             onImport = update,
         )
     }
+
+    if (celebrate > 0) {
+        val weekly = celebrate == 2
+        val done = data.thisWeek().size
+        Celebration(
+            weekly = weekly,
+            title = if (weekly) "Hafta tamamlandı!" else "Antrenman tamamlandı!",
+            subtitle = if (weekly) "$WEEKLY_TARGET/$WEEKLY_TARGET · seri devam ediyor 🔥" else "Bu hafta $done/$WEEKLY_TARGET",
+            onDone = { celebrate = 0 },
+        )
+    }
+    }
 }
 
 @Composable
 fun TabBar(tab: Int, onTab: (Int) -> Unit) {
     NavigationBar(containerColor = CardBg) {
         NavigationBarItem(
-            selected = tab == 0,
-            onClick = { onTab(0) },
-            icon = { Icon(Icons.Default.Home, null) },
-            label = { Text("Antrenman") },
-        )
-        NavigationBarItem(
             selected = tab == 1,
             onClick = { onTab(1) },
             icon = { Icon(Icons.Default.DateRange, null) },
             label = { Text("Takip") },
+        )
+        NavigationBarItem(
+            selected = tab == 0,
+            onClick = { onTab(0) },
+            icon = { Icon(Icons.Default.Home, null) },
+            label = { Text("Antrenman") },
         )
     }
 }
@@ -201,6 +218,8 @@ fun HomeScreen(
     var importDialog by remember { mutableStateOf(false) }
     var cardioDialog by remember { mutableStateOf(false) }
     var chooser by remember { mutableStateOf(false) }
+    // 1: test verisi yükle, 2: verileri sıfırla
+    var confirm by remember { mutableIntStateOf(0) }
     val week = data.thisWeek()
     val doneThisWeek = week.map { it.workout }.toSet()
 
@@ -220,6 +239,14 @@ fun HomeScreen(
                             DropdownMenuItem(
                                 text = { Text("Yedek yükle") },
                                 onClick = { menu = false; importDialog = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Test verisi yükle") },
+                                onClick = { menu = false; confirm = 1 },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Verileri sıfırla") },
+                                onClick = { menu = false; confirm = 2 },
                             )
                         }
                     }
@@ -366,6 +393,27 @@ fun HomeScreen(
         ImportDialog(
             onDismiss = { importDialog = false },
             onImport = { onImport(it); importDialog = false },
+        )
+    }
+
+    if (confirm > 0) {
+        val sample = confirm == 1
+        AlertDialog(
+            onDismissRequest = { confirm = 0 },
+            title = { Text(if (sample) "Test verisi yüklensin mi?" else "Veriler sıfırlansın mı?") },
+            text = {
+                Text(
+                    if (sample) "3 aylık örnek veri mevcut kayıtlarının yerini alır. Denedikten sonra \"Verileri sıfırla\" ile temizleyebilirsin."
+                    else "Bütün kilolar, antrenmanlar, ölçüler ve seri silinir. Geri alınamaz."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onImport(if (sample) sampleData() else AppData(start = java.time.LocalDate.now().toString()))
+                    confirm = 0
+                }) { Text(if (sample) "Yükle" else "Sıfırla") }
+            },
+            dismissButton = { TextButton(onClick = { confirm = 0 }) { Text("Vazgeç") } },
         )
     }
 
@@ -717,10 +765,12 @@ fun TrackScreen(
     data: AppData,
     tabBar: @Composable () -> Unit,
     onBody: (Double?, Double?, Double?) -> Unit,
+    onGoals: (Double, Double) -> Unit,
     onOpen: (String) -> Unit,
 ) {
     val context = LocalContext.current
     var bodyDialog by remember { mutableStateOf(false) }
+    var goalDialog by remember { mutableStateOf(false) }
     var bodyChart by rememberSaveable { mutableIntStateOf(0) }
     var selected by rememberSaveable {
         mutableStateOf(ALL_EXERCISES.firstOrNull { data.historyOf(it).isNotEmpty() } ?: ALL_EXERCISES.first())
@@ -748,9 +798,9 @@ fun TrackScreen(
         ) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("🔥", fontSize = 30.sp)
-                        Spacer(Modifier.size(12.dp))
+                    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Flame(active = streak > 0)
+                        Spacer(Modifier.size(8.dp))
                         Column {
                             Text(
                                 if (streak > 0) "$streak haftalık seri" else "Seri henüz başlamadı",
@@ -771,12 +821,24 @@ fun TrackScreen(
                         Row {
                             Stat("Kilo", data.bodyWeight(), "kg", Modifier.weight(1f))
                             Stat("Bel", data.waist(), "cm", Modifier.weight(1f))
-                            Stat("Boy", data.height(), "cm", Modifier.weight(1f))
+                            Stat("Boy", data.height() ?: HEIGHT_CM, "cm", Modifier.weight(1f))
                         }
                         Spacer(Modifier.height(12.dp))
                         FilledTonalButton(onClick = { bodyDialog = true }, modifier = Modifier.fillMaxWidth()) {
                             Text("Ölçü gir")
                         }
+                    }
+                }
+            }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Hedefler", fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { goalDialog = true }) { Text("Düzenle") }
+                        }
+                        GoalBar("Kilo", "kg", data.firstBodyWeight(), data.bodyWeight(), data.goalWeight, Bg, MaterialTheme.colorScheme.primary, Up, Muted)
+                        GoalBar("Bel çevresi", "cm", data.firstWaist(), data.waist(), data.goalWaist, Bg, MaterialTheme.colorScheme.primary, Up, Muted)
                     }
                 }
             }
@@ -859,10 +921,38 @@ fun TrackScreen(
         }
     }
 
+    if (goalDialog) {
+        var gw by remember { mutableStateOf(fmt(data.goalWeight)) }
+        var gb by remember { mutableStateOf(fmt(data.goalWaist)) }
+        AlertDialog(
+            onDismissRequest = { goalDialog = false },
+            title = { Text("Hedefler") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    UnitField("Hedef kilo", "kg", gw) { gw = decimalOnly(it) }
+                    UnitField("Hedef bel çevresi", "cm", gb) { gb = decimalOnly(it) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val w = gw.replace(',', '.').toDoubleOrNull()
+                    val b = gb.replace(',', '.').toDoubleOrNull()
+                    if (w == null || b == null) {
+                        Toast.makeText(context, "Hedefler geçersiz", Toast.LENGTH_SHORT).show()
+                    } else {
+                        onGoals(w, b)
+                        goalDialog = false
+                    }
+                }) { Text("Kaydet") }
+            },
+            dismissButton = { TextButton(onClick = { goalDialog = false }) { Text("Vazgeç") } },
+        )
+    }
+
     if (bodyDialog) {
         var weight by remember { mutableStateOf(data.bodyWeight()?.let(::fmt) ?: "") }
         var waist by remember { mutableStateOf(data.waist()?.let(::fmt) ?: "") }
-        var height by remember { mutableStateOf(data.height()?.let(::fmt) ?: "") }
+        var height by remember { mutableStateOf(fmt(data.height() ?: HEIGHT_CM)) }
         AlertDialog(
             onDismissRequest = { bodyDialog = false },
             title = { Text("Ölçü gir") },
