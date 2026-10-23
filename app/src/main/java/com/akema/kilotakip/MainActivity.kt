@@ -124,6 +124,7 @@ fun App(store: Store) {
             data = data,
             onStep = { step = it },
             onWeight = { ex, kg -> update(data.setWeight(ex, kg)) },
+            onCardio = { update(data.copy(cardio = it)) },
             onFinish = {
                 update(data.finish(running))
                 running = -1
@@ -145,6 +146,7 @@ fun App(store: Store) {
             data = data,
             onStart = { running = it; step = 0 },
             onOpen = { detail = it },
+            onCardio = { update(data.copy(cardio = it)) },
             onImport = update,
         )
     }
@@ -155,11 +157,13 @@ fun HomeScreen(
     data: AppData,
     onStart: (Int) -> Unit,
     onOpen: (String) -> Unit,
+    onCardio: (Cardio?) -> Unit,
     onImport: (AppData) -> Unit,
 ) {
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
     var importDialog by remember { mutableStateOf(false) }
+    var cardioDialog by remember { mutableStateOf(false) }
     var chooser by remember { mutableStateOf(false) }
     val week = data.thisWeek()
     val doneThisWeek = week.map { it.workout }.toSet()
@@ -268,6 +272,21 @@ fun HomeScreen(
                                 )
                             }
                         }
+                        HorizontalDivider(color = Bg.copy(alpha = 0.6f))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { cardioDialog = true }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("Kardiyo", fontSize = 15.sp, modifier = Modifier.weight(1f))
+                            Text(
+                                data.cardio?.text?.ifEmpty { null } ?: "—",
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 14.sp,
+                            )
+                        }
                     }
                 }
             }
@@ -311,6 +330,76 @@ fun HomeScreen(
             onImport = { onImport(it); importDialog = false },
         )
     }
+
+    if (cardioDialog) {
+        var speed by remember { mutableStateOf(data.cardio?.speed?.let(::fmt) ?: "") }
+        var incline by remember { mutableStateOf(data.cardio?.incline?.let(::fmt) ?: "") }
+        var minutes by remember { mutableStateOf(data.cardio?.minutes?.toString() ?: "") }
+        AlertDialog(
+            onDismissRequest = { cardioDialog = false },
+            title = { Text("Kardiyo") },
+            text = {
+                CardioFields(speed, incline, minutes, { speed = it }, { incline = it }, { minutes = it })
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onCardio(cardioOf(speed, incline, minutes))
+                    cardioDialog = false
+                    Toast.makeText(context, "Kaydedildi", Toast.LENGTH_SHORT).show()
+                }) { Text("Kaydet") }
+            },
+            dismissButton = { TextButton(onClick = { cardioDialog = false }) { Text("Vazgeç") } },
+        )
+    }
+}
+
+private fun decimalOnly(v: String) = v.filter { it.isDigit() || it == ',' || it == '.' }.take(6)
+
+private fun cardioOf(speed: String, incline: String, minutes: String): Cardio? =
+    Cardio(
+        speed.replace(',', '.').toDoubleOrNull(),
+        incline.replace(',', '.').toDoubleOrNull(),
+        minutes.toIntOrNull(),
+    ).takeIf { it.speed != null || it.incline != null || it.minutes != null }
+
+@Composable
+fun CardioFields(
+    speed: String,
+    incline: String,
+    minutes: String,
+    onSpeed: (String) -> Unit,
+    onIncline: (String) -> Unit,
+    onMinutes: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        OutlinedTextField(
+            value = speed,
+            onValueChange = { onSpeed(decimalOnly(it)) },
+            label = { Text("Hız") },
+            suffix = { Text("km/s") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = incline,
+            onValueChange = { onIncline(decimalOnly(it)) },
+            label = { Text("Eğim") },
+            suffix = { Text("%") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = minutes,
+            onValueChange = { v -> onMinutes(v.filter { it.isDigit() }.take(3)) },
+            label = { Text("Süre") },
+            suffix = { Text("dk") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Composable
@@ -320,18 +409,27 @@ fun WorkoutScreen(
     data: AppData,
     onStep: (Int) -> Unit,
     onWeight: (String, Double) -> Unit,
+    onCardio: (Cardio?) -> Unit,
     onFinish: () -> Unit,
     onExit: () -> Unit,
 ) {
     val context = LocalContext.current
-    val ex = workout.exercises[step]
-    val total = workout.exercises.size
+    // Hareketlerden sonraki son adım kardiyo; o adımda ex null.
+    val ex = workout.exercises.getOrNull(step)
+    val total = workout.exercises.size + 1
     val isLast = step == total - 1
-    var kg by remember(step) { mutableStateOf(data.weight(ex.name)?.let(::fmt) ?: "") }
+    var kg by remember(step) { mutableStateOf(ex?.let { data.weight(it.name) }?.let(::fmt) ?: "") }
     var confirmExit by remember { mutableStateOf(false) }
+    var speed by rememberSaveable { mutableStateOf(data.cardio?.speed?.let(::fmt) ?: "") }
+    var incline by rememberSaveable { mutableStateOf(data.cardio?.incline?.let(::fmt) ?: "") }
+    var minutes by rememberSaveable { mutableStateOf(data.cardio?.minutes?.toString() ?: "") }
 
     // Girilen kilo kayıtlıdan farklıysa kaydeder; boş bırakılırsa kayıtlı kilo olduğu gibi kalır.
     fun commit(): Boolean {
+        if (ex == null) {
+            cardioOf(speed, incline, minutes)?.let { if (it != data.cardio) onCardio(it) }
+            return true
+        }
         if (kg.isBlank()) return true
         val v = kg.replace(',', '.').toDoubleOrNull()
         if (v == null) {
@@ -374,6 +472,11 @@ fun WorkoutScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(28.dp))
+            if (ex == null) {
+                Text("Kardiyo", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(24.dp))
+                CardioFields(speed, incline, minutes, { speed = it }, { incline = it }, { minutes = it })
+            } else {
             Text(ex.name, fontSize = 28.sp, fontWeight = FontWeight.Bold, lineHeight = 34.sp)
             Spacer(Modifier.height(8.dp))
             Text(ex.label, color = Muted, fontSize = 16.sp)
@@ -409,6 +512,7 @@ fun WorkoutScreen(
                 color = Muted,
                 fontSize = 14.sp,
             )
+            }
 
             Spacer(Modifier.weight(1f))
             Row(

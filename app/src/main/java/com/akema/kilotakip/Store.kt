@@ -17,9 +17,20 @@ data class Session(val id: Long, val workout: Int, val date: String)
 
 data class Change(val text: String, val sign: Int)
 
+/** Her antrenmanın sonundaki kardiyo; kilo gibi kayıtlı kalır, değişince güncellenir. */
+data class Cardio(val speed: Double?, val incline: Double?, val minutes: Int?) {
+    val text: String
+        get() = listOfNotNull(
+            speed?.let { "${fmt(it)} km/s" },
+            incline?.let { "%${fmt(it)} eğim" },
+            minutes?.let { "$it dk" },
+        ).joinToString(" · ")
+}
+
 data class AppData(
     val history: List<WeightChange> = emptyList(),
     val sessions: List<Session> = emptyList(),
+    val cardio: Cardio? = null,
 ) {
     fun historyOf(exercise: String): List<WeightChange> =
         history.filter { it.exercise == exercise }.sortedWith(compareBy({ it.date }, { it.id }))
@@ -76,6 +87,15 @@ class Store(context: Context) {
             .put("sessions", JSONArray().apply {
                 d.sessions.forEach { put(JSONObject().put("id", it.id).put("w", it.workout).put("date", it.date)) }
             })
+            .apply {
+                d.cardio?.let { c ->
+                    put("cardio", JSONObject().apply {
+                        c.speed?.let { put("s", it) }
+                        c.incline?.let { put("i", it) }
+                        c.minutes?.let { put("m", it) }
+                    })
+                }
+            }
             .toString()
 
         fun fromJson(s: String): AppData {
@@ -91,6 +111,13 @@ class Store(context: Context) {
                 sessions = (0 until ss.length()).map { i ->
                     val e = ss.getJSONObject(i)
                     Session(e.getLong("id"), e.getInt("w"), e.getString("date"))
+                },
+                cardio = o.optJSONObject("cardio")?.let { c ->
+                    Cardio(
+                        if (c.has("s")) c.getDouble("s") else null,
+                        if (c.has("i")) c.getDouble("i") else null,
+                        if (c.has("m")) c.getInt("m") else null,
+                    )
                 },
             )
         }
