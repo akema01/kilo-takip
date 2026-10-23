@@ -4,7 +4,7 @@
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
-        android:label="Kilo Takip"
+        android:label="Antrenman Takip"
         android:theme="@style/AppTheme">
         <activity
             android:name=".MainActivity"

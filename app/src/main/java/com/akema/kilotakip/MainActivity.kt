@@ -11,6 +11,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,7 +33,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -41,11 +45,14 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -78,6 +85,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.Locale
 
 private val Bg = Color(0xFF0D1330)
@@ -85,6 +93,7 @@ private val CardBg = Color(0xFF18224A)
 private val Muted = Color(0xFFA9B3D9)
 private val Up = Color(0xFF3DD68C)
 private val Down = Color(0xFFFF6B6B)
+private val Fire = Color(0xFFFFA94D)
 private const val STEP = 2.5
 
 class MainActivity : ComponentActivity() {
@@ -116,6 +125,7 @@ fun App(store: Store) {
     var running by rememberSaveable { mutableIntStateOf(-1) }
     var step by rememberSaveable { mutableIntStateOf(0) }
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
 
     when {
         running >= 0 -> WorkoutScreen(
@@ -142,8 +152,15 @@ fun App(store: Store) {
                 onDelete = { c -> update(data.copy(history = data.history - c)) },
             )
         }
+        tab == 1 -> TrackScreen(
+            data = data,
+            tabBar = { TabBar(tab) { tab = it } },
+            onBody = { w, b, h -> update(data.addBody(w, b, h)) },
+            onOpen = { detail = it },
+        )
         else -> HomeScreen(
             data = data,
+            tabBar = { TabBar(tab) { tab = it } },
             onStart = { running = it; step = 0 },
             onOpen = { detail = it },
             onCardio = { update(data.copy(cardio = it)) },
@@ -153,8 +170,27 @@ fun App(store: Store) {
 }
 
 @Composable
+fun TabBar(tab: Int, onTab: (Int) -> Unit) {
+    NavigationBar(containerColor = CardBg) {
+        NavigationBarItem(
+            selected = tab == 0,
+            onClick = { onTab(0) },
+            icon = { Icon(Icons.Default.Home, null) },
+            label = { Text("Antrenman") },
+        )
+        NavigationBarItem(
+            selected = tab == 1,
+            onClick = { onTab(1) },
+            icon = { Icon(Icons.Default.DateRange, null) },
+            label = { Text("Takip") },
+        )
+    }
+}
+
+@Composable
 fun HomeScreen(
     data: AppData,
+    tabBar: @Composable () -> Unit,
     onStart: (Int) -> Unit,
     onOpen: (String) -> Unit,
     onCardio: (Cardio?) -> Unit,
@@ -172,7 +208,7 @@ fun HomeScreen(
         containerColor = Bg,
         topBar = {
             TopAppBar(
-                title = { Text("Kilo Takip", fontWeight = FontWeight.Bold) },
+                title = { Text("Antrenman Takip", fontWeight = FontWeight.Bold) },
                 actions = {
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Menü") }
@@ -192,15 +228,17 @@ fun HomeScreen(
             )
         },
         bottomBar = {
-            Button(
-                onClick = { chooser = true },
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(16.dp)
-                    .height(56.dp),
-            ) { Text("Antrenmanı başlat", fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+            Column {
+                Button(
+                    onClick = { chooser = true },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .height(56.dp),
+                ) { Text("Antrenmanı başlat", fontSize = 18.sp, fontWeight = FontWeight.Bold) }
+                tabBar()
+            }
         },
     ) { pad ->
         LazyColumn(
@@ -668,6 +706,264 @@ fun DetailScreen(
             confirmButton = { TextButton(onClick = { onDelete(c); toDelete = null }) { Text("Sil") } },
             dismissButton = { TextButton(onClick = { toDelete = null }) { Text("Vazgeç") } },
         )
+    }
+}
+
+/** Programdaki bütün hareketler, ilk geçtikleri sırayla ve tekrarsız. */
+private val ALL_EXERCISES = PROGRAM.flatMap { w -> w.exercises.map { it.name } }.distinct()
+
+@Composable
+fun TrackScreen(
+    data: AppData,
+    tabBar: @Composable () -> Unit,
+    onBody: (Double?, Double?, Double?) -> Unit,
+    onOpen: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    var bodyDialog by remember { mutableStateOf(false) }
+    var bodyChart by rememberSaveable { mutableIntStateOf(0) }
+    var selected by rememberSaveable {
+        mutableStateOf(ALL_EXERCISES.firstOrNull { data.historyOf(it).isNotEmpty() } ?: ALL_EXERCISES.first())
+    }
+    val streak = data.streak()
+    val weeks = data.weeks()
+
+    Scaffold(
+        containerColor = Bg,
+        topBar = {
+            TopAppBar(
+                title = { Text("Takip", fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Bg),
+            )
+        },
+        bottomBar = tabBar,
+    ) { pad ->
+        LazyColumn(
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp,
+                top = pad.calculateTopPadding() + 4.dp,
+                bottom = pad.calculateBottomPadding() + 16.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("🔥", fontSize = 30.sp)
+                        Spacer(Modifier.size(12.dp))
+                        Column {
+                            Text(
+                                if (streak > 0) "$streak haftalık seri" else "Seri henüz başlamadı",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (streak > 0) Fire else MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text("Her hafta $WEEKLY_TARGET antrenman = seri devam", color = Muted, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+
+            item { SectionTitle("Vücut") }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row {
+                            Stat("Kilo", data.bodyWeight(), "kg", Modifier.weight(1f))
+                            Stat("Bel", data.waist(), "cm", Modifier.weight(1f))
+                            Stat("Boy", data.height(), "cm", Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        FilledTonalButton(onClick = { bodyDialog = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Ölçü gir")
+                        }
+                    }
+                }
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = bodyChart == 0, onClick = { bodyChart = 0 }, label = { Text("Kilo") })
+                    FilterChip(selected = bodyChart == 1, onClick = { bodyChart = 1 }, label = { Text("Bel") })
+                }
+            }
+            item {
+                val series = if (bodyChart == 0) data.bodySeries { it.weight } else data.bodySeries { it.waist }
+                if (series.isEmpty()) Text("Henüz ölçü girilmedi", color = Muted, fontSize = 14.sp)
+                else TimeChart(if (bodyChart == 0) "Kilo" else "Bel çevresi", series, if (bodyChart == 0) "kg" else "cm", step = false)
+            }
+
+            item { SectionTitle("Haftalar") }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+                    Column {
+                        Text(
+                            "Uygulamayı ${weeks.size} haftadır kullanıyorsun",
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(16.dp),
+                        )
+                        weeks.forEachIndexed { i, (start, count) ->
+                            HorizontalDivider(color = Bg.copy(alpha = 0.6f))
+                            Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(if (i == 0) "Bu hafta" else "${weeks.size - i}. hafta", fontSize = 15.sp)
+                                    Text("${shortDate(start.toString())} – ${shortDate(start.plusDays(6).toString())}", color = Muted, fontSize = 12.sp)
+                                }
+                                Text(
+                                    "$count/$WEEKLY_TARGET",
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (count >= WEEKLY_TARGET) Up else MaterialTheme.colorScheme.onSurface,
+                                )
+                                if (count >= WEEKLY_TARGET) {
+                                    Spacer(Modifier.size(6.dp))
+                                    Icon(Icons.Default.Check, null, tint = Up, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item { SectionTitle("Ağırlık grafiği") }
+            item {
+                Row(
+                    Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ALL_EXERCISES.forEach { name ->
+                        FilterChip(selected = name == selected, onClick = { selected = name }, label = { Text(name) })
+                    }
+                }
+            }
+            item {
+                val hist = data.historyOf(selected)
+                if (hist.isEmpty()) {
+                    Text("$selected için henüz kilo girilmedi", color = Muted, fontSize = 14.sp)
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            Modifier.clickable { onOpen(selected) },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${fmt(hist.first().kg)} kg → ${fmt(hist.last().kg)} kg",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            ChangeBadge(change(hist.last().kg, hist.first().kg))
+                        }
+                        TimeChart(selected, hist.map { it.date to it.kg }, "kg", step = true)
+                    }
+                }
+            }
+        }
+    }
+
+    if (bodyDialog) {
+        var weight by remember { mutableStateOf(data.bodyWeight()?.let(::fmt) ?: "") }
+        var waist by remember { mutableStateOf(data.waist()?.let(::fmt) ?: "") }
+        var height by remember { mutableStateOf(data.height()?.let(::fmt) ?: "") }
+        AlertDialog(
+            onDismissRequest = { bodyDialog = false },
+            title = { Text("Ölçü gir") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    UnitField("Kilo", "kg", weight) { weight = decimalOnly(it) }
+                    UnitField("Bel çevresi", "cm", waist) { waist = decimalOnly(it) }
+                    UnitField("Boy", "cm", height) { height = decimalOnly(it) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val w = weight.replace(',', '.').toDoubleOrNull()
+                    val b = waist.replace(',', '.').toDoubleOrNull()
+                    val h = height.replace(',', '.').toDoubleOrNull()
+                    if (w == null && b == null && h == null) {
+                        Toast.makeText(context, "En az bir ölçü gir", Toast.LENGTH_SHORT).show()
+                    } else {
+                        onBody(w, b, h)
+                        bodyDialog = false
+                        Toast.makeText(context, "Kaydedildi", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Kaydet") }
+            },
+            dismissButton = { TextButton(onClick = { bodyDialog = false }) { Text("Vazgeç") } },
+        )
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(text, fontWeight = FontWeight.Bold, fontSize = 17.sp, modifier = Modifier.padding(top = 8.dp))
+}
+
+@Composable
+private fun Stat(label: String, value: Double?, unit: String, modifier: Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, color = Muted, fontSize = 13.sp)
+        Text(value?.let { "${fmt(it)} $unit" } ?: "—", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun UnitField(label: String, unit: String, value: String, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        suffix = { Text(unit) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/**
+ * Değerlerin zamana göre grafiği; yatay eksen gerçek tarihler, çizgi bugüne uzanır.
+ * step: kaldırılan kilo gibi bir sonraki değişikliğe kadar sabit kalan değerler için basamaklı çizim.
+ */
+@Composable
+fun TimeChart(title: String, points: List<Pair<String, Double>>, unit: String, step: Boolean) {
+    val color = MaterialTheme.colorScheme.primary
+    val first = LocalDate.parse(points.first().first)
+    val days = ChronoUnit.DAYS.between(first, LocalDate.now()).coerceAtLeast(1).toFloat()
+    val min = points.minOf { it.second }
+    val max = points.maxOf { it.second }
+    Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
+        Column(Modifier.padding(14.dp)) {
+            Row {
+                Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text("${fmt(min)} – ${fmt(max)} $unit", color = Muted, fontSize = 13.sp)
+            }
+            Canvas(
+                Modifier
+                    .fillMaxWidth()
+                    .height(150.dp)
+                    .padding(top = 14.dp, bottom = 6.dp, start = 6.dp, end = 6.dp)
+            ) {
+                val range = (max - min).takeIf { it > 0 } ?: 1.0
+                fun x(date: String) = ChronoUnit.DAYS.between(first, LocalDate.parse(date)) / days * size.width
+                fun y(v: Double) = size.height - ((v - min) / range * size.height * 0.85 + size.height * 0.075).toFloat()
+                listOf(min, max).forEach {
+                    drawLine(Muted.copy(alpha = 0.2f), Offset(0f, y(it)), Offset(size.width, y(it)), 1.dp.toPx())
+                }
+                val path = Path()
+                points.forEachIndexed { i, (d, v) ->
+                    if (i == 0) path.moveTo(x(d), y(v))
+                    else {
+                        if (step) path.lineTo(x(d), y(points[i - 1].second))
+                        path.lineTo(x(d), y(v))
+                    }
+                }
+                path.lineTo(size.width, y(points.last().second))
+                drawPath(path, color, style = Stroke(width = 2.5.dp.toPx()))
+                points.forEach { (d, v) -> drawCircle(color, 4.dp.toPx(), Offset(x(d), y(v))) }
+            }
+            Row {
+                Text(shortDate(points.first().first), color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                Text("Bugün", color = Muted, fontSize = 12.sp)
+            }
+        }
     }
 }
 

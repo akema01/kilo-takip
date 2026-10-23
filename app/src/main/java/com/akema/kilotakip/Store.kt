@@ -27,11 +27,59 @@ data class Cardio(val speed: Double?, val incline: Double?, val minutes: Int?) {
         ).joinToString(" · ")
 }
 
+/** Vücut ölçüsü kaydı; boş bırakılan alan null kalır, güncel değer her alanın son dolu kaydıdır. */
+data class BodyEntry(val id: Long, val date: String, val weight: Double?, val waist: Double?, val height: Double?)
+
+fun weekStart(d: LocalDate): LocalDate = d.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+
 data class AppData(
     val history: List<WeightChange> = emptyList(),
     val sessions: List<Session> = emptyList(),
     val cardio: Cardio? = null,
+    val body: List<BodyEntry> = emptyList(),
+    /** Uygulamanın ilk açıldığı gün; kaç haftadır kullanıldığı buradan sayılır. */
+    val start: String? = null,
 ) {
+    private fun bodySorted() = body.sortedWith(compareBy({ it.date }, { it.id }))
+
+    fun bodyWeight() = bodySorted().lastOrNull { it.weight != null }?.weight
+    fun waist() = bodySorted().lastOrNull { it.waist != null }?.waist
+    fun height() = bodySorted().lastOrNull { it.height != null }?.height
+
+    fun bodySeries(pick: (BodyEntry) -> Double?): List<Pair<String, Double>> =
+        bodySorted().mapNotNull { e -> pick(e)?.let { e.date to it } }
+
+    /** Aynı gün tekrar girilirse o günün kaydı güncellenir. */
+    fun addBody(weight: Double?, waist: Double?, height: Double?): AppData {
+        val today = LocalDate.now().toString()
+        return copy(body = body.filterNot { it.date == today } + BodyEntry(System.currentTimeMillis(), today, weight, waist, height))
+    }
+
+    fun firstDay(): LocalDate =
+        (listOfNotNull(start) + sessions.map { it.date } + history.map { it.date }).minOrNull()
+            ?.let { LocalDate.parse(it) } ?: LocalDate.now()
+
+    /** İlk haftadan bu haftaya kadar her hafta (Pazartesi başlangıcı) ve tamamlanan antrenman sayısı, yeniden eskiye. */
+    fun weeks(): List<Pair<LocalDate, Int>> {
+        val perWeek = sessions.groupingBy { weekStart(LocalDate.parse(it.date)) }.eachCount()
+        val current = weekStart(LocalDate.now())
+        return generateSequence(weekStart(firstDay())) { it.plusWeeks(1) }
+            .takeWhile { !it.isAfter(current) }
+            .map { it to (perWeek[it] ?: 0) }
+            .toList()
+            .asReversed()
+    }
+
+    /** Hedefi tamamlanmış art arda hafta sayısı; bu hafta henüz bitmediği için eksikse seriyi bozmaz. */
+    fun streak(): Int {
+        val w = weeks()
+        var n = if ((w.firstOrNull()?.second ?: 0) >= WEEKLY_TARGET) 1 else 0
+        for ((_, count) in w.drop(1)) {
+            if (count >= WEEKLY_TARGET) n++ else break
+        }
+        return n
+    }
+
     fun historyOf(exercise: String): List<WeightChange> =
         history.filter { it.exercise == exercise }.sortedWith(compareBy({ it.date }, { it.id }))
 
@@ -57,7 +105,7 @@ data class AppData(
 
     /** Bu haftanın (Pazartesi'den itibaren) antrenmanları. */
     fun thisWeek(): List<Session> {
-        val start = LocalDate.now().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        val start = weekStart(LocalDate.now())
         return sessions.filter { !LocalDate.parse(it.date).isBefore(start) }
     }
 }
@@ -68,9 +116,12 @@ class Store(context: Context) {
     private val prefs = context.getSharedPreferences("data", Context.MODE_PRIVATE)
 
     // "logs" ilk sürümün verisi; varsa bir kereliğine yeni yapıya çevrilir.
-    fun load(): AppData =
-        (prefs.getString("data", null) ?: prefs.getString("logs", null))
+    fun load(): AppData {
+        val d = (prefs.getString("data", null) ?: prefs.getString("logs", null))
             ?.let { runCatching { fromJson(it) }.getOrNull() } ?: AppData()
+        if (d.start != null) return d
+        return d.copy(start = d.firstDay().toString()).also { save(it) }
+    }
 
     fun save(data: AppData) {
         prefs.edit().putString("data", toJson(data)).apply()
@@ -95,6 +146,18 @@ class Store(context: Context) {
                         c.minutes?.let { put("m", it) }
                     })
                 }
+                d.start?.let { put("start", it) }
+                put("body", JSONArray().apply {
+                    d.body.forEach { b ->
+                        put(JSONObject().apply {
+                            put("id", b.id)
+                            put("date", b.date)
+                            b.weight?.let { put("w", it) }
+                            b.waist?.let { put("bel", it) }
+                            b.height?.let { put("boy", it) }
+                        })
+                    }
+                })
             }
             .toString()
 
@@ -119,6 +182,14 @@ class Store(context: Context) {
                         if (c.has("m")) c.getInt("m") else null,
                     )
                 },
+                body = o.optJSONArray("body")?.let { b ->
+                    (0 until b.length()).map { i ->
+                        val e = b.getJSONObject(i)
+                        fun d(k: String) = if (e.has(k)) e.getDouble(k) else null
+                        BodyEntry(e.getLong("id"), e.getString("date"), d("w"), d("bel"), d("boy"))
+                    }
+                } ?: emptyList(),
+                start = o.optString("start").ifEmpty { null },
             )
         }
 

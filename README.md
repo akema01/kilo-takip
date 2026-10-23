@@ -1,4 +1,4 @@
-# Kilo Takip
+# Antrenman Takip
 
 Haftalık antrenman programı için kişisel kilo/tekrar takip uygulaması (Android, Kotlin + Jetpack Compose).
 
