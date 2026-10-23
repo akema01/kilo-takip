@@ -12,15 +12,10 @@ import kotlin.math.abs
 /** Bir hareketin kilosunun değiştiği an. Güncel kilo = hareketin son değişikliği. */
 data class WeightChange(val id: Long, val exercise: String, val date: String, val kg: Double)
 
-/** Antrenman sonundaki kardiyo; yapılmadıysa Session.cardio null. */
-data class Cardio(val speed: Double?, val incline: Double?, val minutes: Int?)
-
 /** Bitirilmiş bir antrenman. */
-data class Session(val id: Long, val workout: Int, val date: String, val cardio: Cardio? = null)
+data class Session(val id: Long, val workout: Int, val date: String)
 
 data class Change(val text: String, val sign: Int)
-
-fun weekStart(d: LocalDate): LocalDate = d.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
 
 data class AppData(
     val history: List<WeightChange> = emptyList(),
@@ -46,31 +41,13 @@ data class AppData(
         return copy(history = rest + WeightChange(System.currentTimeMillis(), exercise, today, kg))
     }
 
-    fun finish(workout: Int, cardio: Cardio?): AppData =
-        copy(sessions = sessions + Session(System.currentTimeMillis(), workout, LocalDate.now().toString(), cardio))
-
-    fun lastCardio(): Cardio? = sessions.sortedBy { it.id }.lastOrNull { it.cardio != null }?.cardio
+    fun finish(workout: Int): AppData =
+        copy(sessions = sessions + Session(System.currentTimeMillis(), workout, LocalDate.now().toString()))
 
     /** Bu haftanın (Pazartesi'den itibaren) antrenmanları. */
     fun thisWeek(): List<Session> {
-        val start = weekStart(LocalDate.now())
+        val start = LocalDate.now().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
         return sessions.filter { !LocalDate.parse(it.date).isBefore(start) }
-    }
-
-    /**
-     * Hedefi (4 antrenman) tamamlanmış art arda hafta sayısı.
-     * Bu hafta henüz bitmediği için tamamlanmadıysa seriyi bozmaz, tamamlandıysa sayılır.
-     */
-    fun streak(): Int {
-        val perWeek = sessions.groupingBy { weekStart(LocalDate.parse(it.date)) }.eachCount()
-        var week = weekStart(LocalDate.now())
-        var n = if ((perWeek[week] ?: 0) >= WEEKLY_TARGET) 1 else 0
-        week = week.minusWeeks(1)
-        while ((perWeek[week] ?: 0) >= WEEKLY_TARGET) {
-            n++
-            week = week.minusWeeks(1)
-        }
-        return n
     }
 }
 
@@ -97,17 +74,7 @@ class Store(context: Context) {
                 }
             })
             .put("sessions", JSONArray().apply {
-                d.sessions.forEach { s ->
-                    val o = JSONObject().put("id", s.id).put("w", s.workout).put("date", s.date)
-                    s.cardio?.let { c ->
-                        o.put("c", JSONObject().apply {
-                            c.speed?.let { put("s", it) }
-                            c.incline?.let { put("i", it) }
-                            c.minutes?.let { put("m", it) }
-                        })
-                    }
-                    put(o)
-                }
+                d.sessions.forEach { put(JSONObject().put("id", it.id).put("w", it.workout).put("date", it.date)) }
             })
             .toString()
 
@@ -123,14 +90,7 @@ class Store(context: Context) {
                 },
                 sessions = (0 until ss.length()).map { i ->
                     val e = ss.getJSONObject(i)
-                    val c = e.optJSONObject("c")?.let { c ->
-                        Cardio(
-                            if (c.has("s")) c.getDouble("s") else null,
-                            if (c.has("i")) c.getDouble("i") else null,
-                            if (c.has("m")) c.getInt("m") else null,
-                        )
-                    }
-                    Session(e.getLong("id"), e.getInt("w"), e.getString("date"), c)
+                    Session(e.getLong("id"), e.getInt("w"), e.getString("date"))
                 },
             )
         }
@@ -159,12 +119,6 @@ class Store(context: Context) {
 
 fun fmt(d: Double): String =
     String.format(Locale.US, "%.2f", d).trimEnd('0').trimEnd('.')
-
-fun cardioText(c: Cardio): String = listOfNotNull(
-    c.speed?.let { "${fmt(it)} km/s" },
-    c.incline?.let { "%${fmt(it)} eğim" },
-    c.minutes?.let { "$it dk" },
-).joinToString(" · ").ifEmpty { "yapıldı" }
 
 fun change(cur: Double, prev: Double?): Change? {
     if (prev == null) return null
