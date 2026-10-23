@@ -208,8 +208,15 @@ fun GoalBar(label: String, unit: String, start: Double?, current: Double?, targe
         Spacer(Modifier.height(8.dp))
         if (current == null) {
             Text("Ölçü girince hedef takibi başlar", color = muted, fontSize = 13.sp)
-            return@Column
+        } else {
+            GoalProgress(unit, start, current, target, track, base, done, muted)
         }
+    }
+}
+
+@Composable
+private fun GoalProgress(unit: String, start: Double?, current: Double, target: Double, track: Color, base: Color, done: Color, muted: Color) {
+    Column {
         val prog = goalProgress(start ?: current, current, target)
         val fill = remember { Animatable(0f) }
         LaunchedEffect(prog) { fill.animateTo(prog, tween(1400, easing = FastOutSlowInEasing)) }

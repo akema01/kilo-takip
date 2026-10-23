@@ -11,6 +11,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -75,6 +76,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -87,6 +89,7 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import java.util.Locale
+import kotlin.math.abs
 
 private val Bg = Color(0xFF0D1330)
 private val CardBg = Color(0xFF18224A)
@@ -218,8 +221,7 @@ fun HomeScreen(
     var importDialog by remember { mutableStateOf(false) }
     var cardioDialog by remember { mutableStateOf(false) }
     var chooser by remember { mutableStateOf(false) }
-    // 1: test verisi yükle, 2: verileri sıfırla
-    var confirm by remember { mutableIntStateOf(0) }
+    var confirmReset by remember { mutableStateOf(false) }
     val week = data.thisWeek()
     val doneThisWeek = week.map { it.workout }.toSet()
 
@@ -241,12 +243,8 @@ fun HomeScreen(
                                 onClick = { menu = false; importDialog = true },
                             )
                             DropdownMenuItem(
-                                text = { Text("Test verisi yükle") },
-                                onClick = { menu = false; confirm = 1 },
-                            )
-                            DropdownMenuItem(
                                 text = { Text("Verileri sıfırla") },
-                                onClick = { menu = false; confirm = 2 },
+                                onClick = { menu = false; confirmReset = true },
                             )
                         }
                     }
@@ -396,24 +394,18 @@ fun HomeScreen(
         )
     }
 
-    if (confirm > 0) {
-        val sample = confirm == 1
+    if (confirmReset) {
         AlertDialog(
-            onDismissRequest = { confirm = 0 },
-            title = { Text(if (sample) "Test verisi yüklensin mi?" else "Veriler sıfırlansın mı?") },
-            text = {
-                Text(
-                    if (sample) "3 aylık örnek veri mevcut kayıtlarının yerini alır. Denedikten sonra \"Verileri sıfırla\" ile temizleyebilirsin."
-                    else "Bütün kilolar, antrenmanlar, ölçüler ve seri silinir. Geri alınamaz."
-                )
-            },
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Veriler sıfırlansın mı?") },
+            text = { Text("Bütün kilolar, antrenmanlar, ölçüler ve seri silinir. Geri alınamaz.") },
             confirmButton = {
                 TextButton(onClick = {
-                    onImport(if (sample) sampleData() else AppData(start = java.time.LocalDate.now().toString()))
-                    confirm = 0
-                }) { Text(if (sample) "Yükle" else "Sıfırla") }
+                    onImport(AppData(start = LocalDate.now().toString()))
+                    confirmReset = false
+                }) { Text("Sıfırla") }
             },
-            dismissButton = { TextButton(onClick = { confirm = 0 }) { Text("Vazgeç") } },
+            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("Vazgeç") } },
         )
     }
 
@@ -551,7 +543,7 @@ fun WorkoutScreen(
                 .padding(pad)
                 .padding(horizontal = 20.dp),
         ) {
-            Text("Hareket ${step + 1}/$total", color = Muted, fontSize = 14.sp)
+            Text(if (ex == null) "Son adım" else "Hareket ${step + 1}/${total - 1}", color = Muted, fontSize = 14.sp)
             Spacer(Modifier.height(6.dp))
             LinearProgressIndicator(
                 progress = { (step + 1).toFloat() / total },
@@ -617,10 +609,8 @@ fun WorkoutScreen(
                 Button(
                     onClick = {
                         if (commit()) {
-                            if (isLast) {
-                                onFinish()
-                                Toast.makeText(context, "${workout.name} tamamlandı 💪", Toast.LENGTH_SHORT).show()
-                            } else onStep(step + 1)
+                            // Bitince kutlama animasyonu App'te gösterilir.
+                            if (isLast) onFinish() else onStep(step + 1)
                         }
                     },
                     modifier = Modifier
@@ -725,7 +715,7 @@ fun DetailScreen(
                     }
                 }
             }
-            if (hist.size >= 2) item { ProgressChart(hist.map { it.kg }) }
+            if (hist.size >= 2) item { TimeChart("Kilo", hist.map { it.date to it.kg }, "kg", step = true) }
             if (hist.isNotEmpty()) item {
                 Text("Kilo değişiklikleri", fontWeight = FontWeight.SemiBold, fontSize = 16.sp, modifier = Modifier.padding(top = 6.dp))
             }
@@ -1011,6 +1001,7 @@ private fun UnitField(label: String, unit: String, value: String, onChange: (Str
 /**
  * Değerlerin zamana göre grafiği; yatay eksen gerçek tarihler, çizgi bugüne uzanır.
  * step: kaldırılan kilo gibi bir sonraki değişikliğe kadar sabit kalan değerler için basamaklı çizim.
+ * Grafiğe dokununca en yakın noktanın tarihi ve değeri başlıkta gösterilir.
  */
 @Composable
 fun TimeChart(title: String, points: List<Pair<String, Double>>, unit: String, step: Boolean) {
@@ -1019,21 +1010,47 @@ fun TimeChart(title: String, points: List<Pair<String, Double>>, unit: String, s
     val days = ChronoUnit.DAYS.between(first, LocalDate.now()).coerceAtLeast(1).toFloat()
     val min = points.minOf { it.second }
     val max = points.maxOf { it.second }
+    // Gün cinsinden konum, 0..1 arası; dokunma ve çizim aynı hesabı kullanır.
+    val xs = remember(points) { points.map { ChronoUnit.DAYS.between(first, LocalDate.parse(it.first)) / days } }
+    var selected by remember(points) { mutableStateOf<Int?>(null) }
     Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
         Column(Modifier.padding(14.dp)) {
-            Row {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Text("${fmt(min)} – ${fmt(max)} $unit", color = Muted, fontSize = 13.sp)
+                val sel = selected?.let { points.getOrNull(it) }
+                if (sel != null) {
+                    Surface(color = color.copy(alpha = 0.18f), shape = RoundedCornerShape(8.dp)) {
+                        Text(
+                            "${shortDate(sel.first)}: ${fmt(sel.second)} $unit",
+                            color = color,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        )
+                    }
+                } else {
+                    Text("${fmt(min)} – ${fmt(max)} $unit", color = Muted, fontSize = 13.sp)
+                }
             }
             Canvas(
                 Modifier
                     .fillMaxWidth()
                     .height(150.dp)
                     .padding(top = 14.dp, bottom = 6.dp, start = 6.dp, end = 6.dp)
+                    .pointerInput(points) {
+                        detectTapGestures { tap ->
+                            val fx = tap.x / size.width
+                            selected = xs.indices.minByOrNull { abs(xs[it] - fx) * 10_000 - it * 0.0001f }
+                        }
+                    }
             ) {
                 val range = (max - min).takeIf { it > 0 } ?: 1.0
                 fun x(date: String) = ChronoUnit.DAYS.between(first, LocalDate.parse(date)) / days * size.width
                 fun y(v: Double) = size.height - ((v - min) / range * size.height * 0.85 + size.height * 0.075).toFloat()
+                selected?.let { i ->
+                    val sx = xs[i] * size.width
+                    drawLine(color.copy(alpha = 0.5f), Offset(sx, 0f), Offset(sx, size.height), 1.5.dp.toPx())
+                }
                 listOf(min, max).forEach {
                     drawLine(Muted.copy(alpha = 0.2f), Offset(0f, y(it)), Offset(size.width, y(it)), 1.dp.toPx())
                 }
@@ -1047,7 +1064,14 @@ fun TimeChart(title: String, points: List<Pair<String, Double>>, unit: String, s
                 }
                 path.lineTo(size.width, y(points.last().second))
                 drawPath(path, color, style = Stroke(width = 2.5.dp.toPx()))
-                points.forEach { (d, v) -> drawCircle(color, 4.dp.toPx(), Offset(x(d), y(v))) }
+                points.forEachIndexed { i, (d, v) ->
+                    if (i == selected) {
+                        drawCircle(Color.White, 7.dp.toPx(), Offset(x(d), y(v)))
+                        drawCircle(color, 5.dp.toPx(), Offset(x(d), y(v)))
+                    } else {
+                        drawCircle(color, 4.dp.toPx(), Offset(x(d), y(v)))
+                    }
+                }
             }
             Row {
                 Text(shortDate(points.first().first), color = Muted, fontSize = 12.sp, modifier = Modifier.weight(1f))
@@ -1078,38 +1102,6 @@ fun ChangeBadge(c: Change?) {
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
         )
-    }
-}
-
-@Composable
-fun ProgressChart(all: List<Double>) {
-    val pts = all.takeLast(20)
-    val color = MaterialTheme.colorScheme.primary
-    Card(colors = CardDefaults.cardColors(containerColor = CardBg)) {
-        Column(Modifier.padding(14.dp)) {
-            Row {
-                Text("Kilo (son ${pts.size} değişiklik)", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Text("${fmt(pts.min())} – ${fmt(pts.max())} kg", color = Muted, fontSize = 13.sp)
-            }
-            Canvas(
-                Modifier
-                    .fillMaxWidth()
-                    .height(130.dp)
-                    .padding(top = 12.dp, start = 6.dp, end = 6.dp)
-            ) {
-                val min = pts.min()
-                val range = (pts.max() - min).takeIf { it > 0 } ?: 1.0
-                val stepX = size.width / (pts.size - 1)
-                val path = Path()
-                pts.forEachIndexed { i, v ->
-                    val x = i * stepX
-                    val y = size.height - ((v - min) / range * size.height * 0.85 + size.height * 0.075).toFloat()
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                    drawCircle(color, 4.dp.toPx(), Offset(x, y))
-                }
-                drawPath(path, color, style = Stroke(width = 2.5.dp.toPx()))
-            }
-        }
     }
 }
 
