@@ -229,7 +229,7 @@ fun HomeScreen(
         containerColor = Bg,
         topBar = {
             TopAppBar(
-                title = { Text("Antrenman Takip", fontWeight = FontWeight.Bold) },
+                title = { Text("Antreman Takip", fontWeight = FontWeight.Bold) },
                 actions = {
                     Box {
                         IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "Menü") }
